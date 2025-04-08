@@ -1,0 +1,169 @@
+--Query to Check Recent SSIS Package Executions
+SELECT 
+    e.execution_id,
+    e.folder_name,
+    e.project_name,
+    e.package_name,
+    e.status,
+    CASE e.status
+        WHEN 1 THEN 'Created'
+        WHEN 2 THEN 'Running'
+        WHEN 3 THEN 'Canceled'
+        WHEN 4 THEN 'Failed'
+        WHEN 5 THEN 'Pending'
+        WHEN 6 THEN 'Ended Unexpectedly'
+        WHEN 7 THEN 'Succeeded'
+        WHEN 8 THEN 'Stopping'
+        WHEN 9 THEN 'Completed'
+    END AS status_description,
+    e.start_time,
+    e.end_time,
+    DATEDIFF(second, e.start_time, ISNULL(e.end_time, GETDATE())) AS duration_seconds
+FROM SSISDB.catalog.executions e
+WHERE e.start_time > DATEADD(day, -7, GETDATE())  -- Last 7 days
+ORDER BY e.start_time DESC;
+
+--Purpose: Lists recent package executions with their status and duration, helping you monitor recent activity.
+
+
+--Query to Find Failed Executions with Error Details
+SELECT 
+    e.execution_id,
+    e.folder_name,
+    e.project_name,
+    e.package_name,
+    e.start_time,
+    m.message_time,
+    m.message_source_name,
+    m.message,
+    m.message_type,
+    CASE m.message_type
+        WHEN 120 THEN 'Error'
+        WHEN 110 THEN 'Warning'
+        WHEN 70 THEN 'Information'
+    END AS message_type_desc
+FROM SSISDB.catalog.executions e
+JOIN SSISDB.catalog.event_messages m
+    ON e.execution_id = m.operation_id
+WHERE e.status = 4  -- Failed executions
+    AND m.message_type = 120  -- Error messages
+    AND e.start_time > DATEADD(day, -30, GETDATE())  -- Last 30 days
+ORDER BY e.start_time DESC;
+
+--Purpose: Identifies failed executions and their specific error messages for troubleshooting.
+
+--Query to Check Execution Performance (Long-Running Packages)
+SELECT 
+    e.execution_id,
+    e.folder_name,
+    e.project_name,
+    e.package_name,
+    e.start_time,
+    e.end_time,
+    DATEDIFF(second, e.start_time, e.end_time) AS duration_seconds,
+    e.status
+FROM SSISDB.catalog.executions e
+WHERE e.end_time IS NOT NULL
+    AND e.start_time > DATEADD(day, -30, GETDATE())
+    AND DATEDIFF(second, e.start_time, e.end_time) > 300  -- Longer than 5 minutes
+ORDER BY duration_seconds DESC;
+
+--Purpose: Highlights packages with long execution times, useful for performance tuning.
+
+--Query to List All Packages in the Catalog
+SELECT 
+    f.name AS folder_name,
+    p.name AS project_name,
+    pkg.name AS package_name,
+    pkg.description,
+    pkg.last_deployed_time
+FROM SSISDB.catalog.folders f
+JOIN SSISDB.catalog.projects p 
+    ON f.folder_id = p.folder_id
+JOIN SSISDB.catalog.packages pkg 
+    ON p.project_id = pkg.project_id
+ORDER BY f.name, p.name, pkg.name;
+
+--Purpose: Provides an inventory of all deployed packages, including their folder and project structure.
+
+--Query to Check Parameter Values for an Execution
+SELECT 
+    e.execution_id,
+    e.folder_name,
+    e.project_name,
+    e.package_name,
+    ep.parameter_name,
+    ep.parameter_value,
+    ep.data_type,
+    ep.sensitive
+FROM SSISDB.catalog.executions e
+JOIN SSISDB.catalog.execution_parameter_values ep
+    ON e.execution_id = ep.execution_id
+WHERE e.start_time > DATEADD(day, -7, GETDATE())  -- Last 7 days
+ORDER BY e.execution_id DESC, ep.parameter_name;
+
+--Purpose: Shows parameter values used during package executions, helpful for debugging configuration issues.
+
+--Query to Check Execution Data Statistics (Rows Processed)
+SELECT 
+    e.execution_id,
+    e.folder_name,
+    e.project_name,
+    e.package_name,
+    ds.source_component_name,
+    ds.destination_component_name,
+    ds.rows_sent
+FROM SSISDB.catalog.executions e
+JOIN SSISDB.catalog.execution_data_statistics ds
+    ON e.execution_id = ds.execution_id
+WHERE e.start_time > DATEADD(day, -7, GETDATE())
+ORDER BY e.execution_id DESC, ds.rows_sent DESC;
+
+--Purpose: Reports the number of rows processed by data flow components, useful for performance analysis.
+
+--Query to Check Operation Messages by Severity
+SELECT 
+    m.operation_id,
+    e.folder_name,
+    e.project_name,
+    e.package_name,
+    m.message_time,
+    m.message_type,
+    CASE m.message_type
+        WHEN 120 THEN 'Error'
+        WHEN 110 THEN 'Warning'
+        WHEN 70 THEN 'Information'
+        ELSE 'Other'
+    END AS message_type_desc,
+    m.message
+FROM SSISDB.catalog.operation_messages m
+JOIN SSISDB.catalog.executions e
+    ON m.operation_id = e.execution_id
+WHERE m.message_time > DATEADD(day, -7, GETDATE())
+    AND m.message_type IN (120, 110)  -- Errors and Warnings
+ORDER BY m.message_time DESC;
+
+--Purpose: Retrieves detailed operation messages (errors/warnings) for recent executions.
+
+--Query to Check Environment Variables Used in Executions
+SELECT 
+    e.execution_id,
+    e.folder_name,
+    e.project_name,
+    e.package_name,
+    env.name AS environment_name,
+    ev.variable_name,
+    ev.value AS variable_value,
+    ev.sensitive
+FROM SSISDB.catalog.executions e
+JOIN SSISDB.catalog.environment_references er
+    ON e.environment_folder_name = er.environment_folder_name
+    AND e.environment_name = er.environment_name
+JOIN SSISDB.catalog.environments env
+    ON er.environment_name = env.name
+JOIN SSISDB.catalog.environment_variables ev
+    ON env.environment_id = ev.environment_id
+WHERE e.start_time > DATEADD(day, -7, GETDATE())
+ORDER BY e.execution_id DESC;
+
+--Purpose: Shows environment variables applied to package executions, useful for validating configurations.
